@@ -569,10 +569,14 @@ syntax match osmEditorComment /!-.*$/
 syntax keyword osmConstants autocalculate AUTOCALCULATE autosize AUTOSIZE
 syntax keyword osmConstants Yes yes YES No no NO
 
+" Need to match GUID like '{1729b011-6316-40f3-99eb-e85fe20bf507}'
+syntax match osmHandle /\v\{[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}\}/
+
 highlight default link osmComment Comment
 highlight default link osmEditorComment String
 highlight default link osmKeywords Type
 highlight default link osmConstants Keyword
+highlight default link osmHandle Identifier
 
 let b:current_syntax = "osm"
 
