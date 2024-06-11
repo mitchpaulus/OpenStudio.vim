@@ -1,14 +1,16 @@
+#!/usr/bin/python3
+
 import sys
 import re
 
 class TokenTypes:
-    GROUP = 1
-    OBJECT_TYPE = 2
-    OBJECT_FIELD = 3
-    OBJECT_FIELD_PROP = 4
-    EOF = 5
-    COMMENT = 6
-    BLANK = 7
+    GROUP = 1  # \group Group Name
+    OBJECT_TYPE = 2 # Version,
+    OBJECT_FIELD = 3 # A1 ; \field Version Identifier
+    OBJECT_FIELD_PROP = 4 # \required-field
+    EOF = 5 # End of file
+    COMMENT = 6 # ! Comment
+    BLANK = 7 # Blank line
 
 class Tokenizer:
     def __init__(self, lines) -> None:
@@ -34,7 +36,7 @@ class Tokenizer:
             return TokenTypes.OBJECT_FIELD_PROP
         elif re.match("[AN]\\d+ *[,;]", line):
             return TokenTypes.OBJECT_FIELD
-        elif line.endswith(','):
+        elif re.match(r'[a-zA-Z0-9:-]+,', line):
             return TokenTypes.OBJECT_TYPE
         elif line.startswith('!'):
             return TokenTypes.COMMENT
@@ -120,7 +122,7 @@ class Parser:
             field_props = []
 
             while self.tokenizer.peek()[0] == TokenTypes.OBJECT_FIELD_PROP:
-                field_props.append(self.match(TokenTypes.OBJECT_FIELD_PROP)[1])
+                field_props.append(self.match(TokenTypes.OBJECT_FIELD_PROP)[1].strip())
 
             idd_field = IddField(field_header[1], field_props)
 
@@ -159,6 +161,28 @@ class IddObject:
 
         return '\n'.join(lines)
 
+    def is_extensible(self):
+        for prop in self.object_type_props:
+            if '\\extensible:' in prop:
+                return True
+        return False
+
+    def extensible_count(self):
+        for prop in self.object_type_props:
+            if '\\extensible:' in prop:
+                # Extract the integer right after the colon
+                colon_idx = prop.index(':')
+                digits = []
+                for c in prop[colon_idx+1:]:
+                    if c.isdigit():
+                        digits.append(c)
+                    else:
+                        break
+
+                return int(''.join(digits))
+
+        return -1
+
     def obj_name(self):
         return self.object_type.split(',')[0].strip()
 
@@ -168,7 +192,11 @@ class IddObject:
 
 class IddField:
     def __init__(self, field_header: str, field_props: list[str]) -> None:
+        # Field header is the field name, ex:
+        #  A1 ; \field Version Identifier
+        # 'A1 ; \field Version Identifier' is the field header
         self.field_header = field_header
+        # Field properties are all properties below that.
         self.field_props = field_props
 
     def __str__(self) -> str:
@@ -178,21 +206,22 @@ class IddField:
             lines.append(f'  {prop}')
         return '\n'.join(lines)
 
+    def field_name(self):
+        try:
+            return self.field_header.split("\\field")[1].strip()
+        except IndexError:
+            # Try again with '\\Field'
+            try:
+                return self.field_header.split("\\Field")[1].strip()
+            except IndexError:
+                return '' # This can happen. Example sometimes with \extensible fields, like 'N7, N8,       \note fields as indicated'
+
     def __repr__(self) -> str:
         return self.__str__()
 
 
-def main():
-    # idd_contents = sys.stdin.read().splitlines()
-    with open('os.idd', encoding='utf-8') as file:
-        idd_contents = file.read().splitlines()
 
-    tokenizer = Tokenizer(idd_contents)
-    tokenizer.tokenize()
-    # tokenizer.print_tokens()
-    parser = Parser(tokenizer)
-    idd_groups = parser.parse_file()
-
+def print_dot(idd_groups):
     reference_map = {} # Mapping from reference key to list of objects
     obj_list_map = {} # Mapping from object to list of references
 
@@ -236,6 +265,70 @@ def main():
     for pointer in pointers:
         print(f'  {pointer};')
     print('}')
+
+
+def to_python_snake_case(s: str) -> str:
+    tokens = []
+    idx = 0
+
+    while idx < len(s):
+        while idx < len(s) and not s[idx].isalnum():
+            idx += 1
+
+        start = idx
+        while idx < len(s) and s[idx].isalnum():
+            idx += 1
+
+        tokens.append(s[start:idx])
+
+    return '_'.join(tokens).lower()
+
+
+def print_python(idd_groups: list[IddGroup]):
+
+    print('def safe_get(in_list, idx):')
+    print('    try:')
+    print('        return in_list[idx]')
+    print('    except IndexError:')
+    print('        return ""')
+    print()
+
+    for group in idd_groups:
+        for obj in group.group_objects:
+            print(f'class {obj.obj_name().replace(":", "").replace("-", "")}:')
+            print('  def __init__(self, fields: list[str]):')
+
+            extensible_index = 1
+            for idx, field in enumerate(obj.object_fields, start=1):
+                field_name = to_python_snake_case(field.field_name())
+                if field_name.strip() == '':
+                    field_name = f'extensible_{extensible_index}'
+                    extensible_index += 1
+
+                if field_name[0].isdigit():
+                    field_name = f'n{field_name}'
+                print(f'    self.{field_name} = safe_get(fields, {idx})')
+
+            print()
+
+
+def main():
+
+    if len(sys.argv) > 1:
+        with open(sys.argv[1], encoding='utf-8') as file:
+            idd_contents = file.read().splitlines()
+    else:
+        # read from stdin
+        idd_contents = sys.stdin.read().splitlines()
+
+    tokenizer = Tokenizer(idd_contents)
+    tokenizer.tokenize()
+    # tokenizer.print_tokens()
+    parser = Parser(tokenizer)
+    idd_groups = parser.parse_file()
+    # print(idd_groups)
+    print_python(idd_groups)
+
 
 
 if __name__ == "__main__":
